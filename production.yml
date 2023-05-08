@@ -1,0 +1,102 @@
+---
+version: "3.9"
+
+volumes:
+  local_data: {}
+  local_redis: {}
+
+networks:
+  cvm:
+    driver: bridge
+
+services:
+  api: &api
+    # image: storesystems.azurecr.io/solutions-management-app-mayorista-backend:master
+    image: mayorista_api:latest
+    environment:
+      - DJANGO_LOG_FILE=api.log
+    env_file:
+      - ./.envs/api.env
+      - ./.envs/db.env
+    command: /start
+    volumes:
+      - ./logs:/app/logs:rw
+    depends_on:
+      - cvm_db
+      - cvm_redis
+    ports:
+      - 8001:8000
+      - 8000:8000
+    networks:
+      - cvm
+    restart: unless-stopped
+ 
+  cvm_db:
+    image: postgres:11-alpine
+    env_file:
+      - ./.envs/db.env
+    ports:
+      - 5432:5432
+    volumes:
+      - local_data:/var/lib/postgresql/data
+    networks:
+      - cvm
+    restart: always
+
+  cvm_redis:
+    image: redis:5.0.5-alpine3.10
+    volumes:
+            - local_redis:/data
+    networks:
+      - cvm
+    ports:
+      - 6379:6379
+    restart: always
+
+  worker:
+    <<: *api
+    ports: []
+    volumes:
+      - /home/azureuser/sftp_work/smart_price:/sftp_work/smart_price:rw
+      - /home/azureuser/sftp_work/item:/sftp_work/item:rw
+      - /home/azureuser/sftp_work/stock:/sftp_work/stock:rw
+    environment:
+      - DJANGO_LOG_FILE=worker.log
+    command: /celery/start-worker
+    restart: unless-stopped
+
+  high_priority:
+    <<: *api
+    ports: []
+    environment:
+      - DJANGO_LOG_FILE=high-priority.log
+    command: /celery/start-high-priority
+    restart: unless-stopped
+
+  beat:
+    <<: *api
+    depends_on:
+      - worker
+    ports: []
+    environment:
+      - DJANGO_LOG_FILE=beat.log
+    command: /celery/start-beat
+    restart: unless-stopped
+
+  migration:
+    <<: *api
+    ports: []
+    environment:
+      - DJANGO_LOG_FILE=migration.log
+    command: /migrate
+
+  mantenedor:
+    image: storesystems.azurecr.io/solutions-management-app-mayorista-front:master
+    networks:
+      - cvm
+    restart: unless-stopped
+    volumes:
+      - ./cert:/etc/ssl
+      - ./nginx:/etc/nginx/conf.d
+    ports:
+      - "18000:80"
